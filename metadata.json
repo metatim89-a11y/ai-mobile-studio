@@ -1,0 +1,7 @@
+{
+  "name": "AI Mobile Studio",
+  "description": "An AI-powered full-stack mobile development environment. Architect, generate, and preview React Native apps with the power of Gemini.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
