@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { Smartphone, Code2, BarChart2, Zap, History, Plus, MessageSquare, Trash2, Edit2, Save, X, Download } from 'lucide-react';
 import ChatInterface from './components/ChatInterface';
 import MobileSimulator from './components/MobileSimulator';
@@ -63,7 +63,7 @@ export default function App() {
     }
   }, [sessions]);
 
-  // Auto-save current session state
+  // Auto-save current session state - Fixed dependency array
   useEffect(() => {
     if (currentSessionId && !state.isGenerating) {
       setSessions(prev => prev.map(session => 
@@ -72,9 +72,9 @@ export default function App() {
           : session
       ));
     }
-  }, [state, currentSessionId]); // Note: excluding isGenerating to avoid constant writes during stream
+  }, [state, currentSessionId, state.isGenerating]);
 
-  const startNewSession = () => {
+  const startNewSession = useCallback(() => {
     const newId = Date.now().toString();
     const newSession: ChatSession = {
       id: newId,
@@ -87,38 +87,38 @@ export default function App() {
     setCurrentSessionId(newId);
     setState(INITIAL_STATE);
     setShowHistory(false);
-  };
+  }, []);
 
-  const loadSession = (session: ChatSession) => {
+  const loadSession = useCallback((session: ChatSession) => {
     setCurrentSessionId(session.id);
     setState(session.state);
     setShowHistory(false);
-  };
+  }, []);
 
-  const deleteSession = (e: React.MouseEvent, id: string) => {
+  const deleteSession = useCallback((e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     setSessions(prev => prev.filter(s => s.id !== id));
     if (currentSessionId === id) {
       setCurrentSessionId(null);
       setState(INITIAL_STATE);
     }
-  };
+  }, [currentSessionId]);
 
-  const startEditingTitle = (e: React.MouseEvent, session: ChatSession) => {
+  const startEditingTitle = useCallback((e: React.MouseEvent, session: ChatSession) => {
     e.stopPropagation();
     setIsEditingTitle(session.id);
     setEditTitleInput(session.title);
-  };
+  }, []);
 
-  const saveTitle = (e: React.MouseEvent | React.KeyboardEvent, id: string) => {
+  const saveTitle = useCallback((e: React.MouseEvent | React.KeyboardEvent, id: string) => {
     e.stopPropagation();
     if (editTitleInput.trim()) {
       setSessions(prev => prev.map(s => s.id === id ? { ...s, title: editTitleInput } : s));
     }
     setIsEditingTitle(null);
-  };
+  }, [editTitleInput]);
 
-  const exportProject = () => {
+  const exportProject = useCallback(() => {
     // Determine what to export: current session or create a new wrapper for current state
     const sessionToExport = currentSessionId 
         ? sessions.find(s => s.id === currentSessionId) 
@@ -133,7 +133,7 @@ export default function App() {
     document.body.appendChild(downloadAnchorNode); // required for firefox
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
-  };
+  }, [currentSessionId, sessions, state]);
 
   const handleSendMessage = useCallback(async (text: string, attachments: Attachment[] = []) => {
     // Ensure we have a session
@@ -169,8 +169,16 @@ export default function App() {
     try {
       let accumulatedResponse = "";
       
+      // Use functional update to access latest state
+      const currentMessages = await new Promise<Message[]>(resolve => {
+        setState(prev => {
+          resolve(prev.messages);
+          return prev;
+        });
+      });
+
       await sendMessageToGemini(
-        [...state.messages, newUserMessage],
+        [...currentMessages, newUserMessage],
         text,
         attachments,
         (chunk) => {
@@ -180,46 +188,49 @@ export default function App() {
 
       const assets = parseGeneratedAssets(accumulatedResponse);
       
-      let newPreview = state.currentPreviewHtml;
-      let newCode = state.currentCode;
-      let newAnalysis = state.analysisData;
-      let activeTabOverride = activeTab;
+      setState(prev => {
+        let newPreview = prev.currentPreviewHtml;
+        let newCode = prev.currentCode;
+        let newAnalysis = prev.analysisData;
+        let activeTabOverride = activeTab;
 
-      assets.forEach(asset => {
-        if (asset.type === 'preview') {
-          newPreview = asset.content;
-          activeTabOverride = 'preview'; 
-        } else if (asset.type === 'code') {
-          newCode = asset.content;
-          if (activeTabOverride !== 'preview') activeTabOverride = 'code';
-        } else if (asset.type === 'analysis') {
-            newAnalysis = parseAnalysisData(asset.content);
-            activeTabOverride = 'analysis';
-        }
+        assets.forEach(asset => {
+          if (asset.type === 'preview') {
+            newPreview = asset.content;
+            activeTabOverride = 'preview'; 
+          } else if (asset.type === 'code') {
+            newCode = asset.content;
+            if (activeTabOverride !== 'preview') activeTabOverride = 'code';
+          } else if (asset.type === 'analysis') {
+              newAnalysis = parseAnalysisData(asset.content);
+              activeTabOverride = 'analysis';
+          }
+        });
+        
+        const newBotMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: MessageRole.Model,
+          content: accumulatedResponse,
+          timestamp: new Date()
+        };
+
+        const newState = {
+          messages: [...prev.messages, newBotMessage],
+          currentPreviewHtml: newPreview,
+          currentCode: newCode,
+          analysisData: newAnalysis,
+          isGenerating: false
+        };
+
+        setActiveTab(activeTabOverride);
+
+        // Explicit save after generation ensures "lastCode" is correct in storage
+        setSessions(prevSessions => prevSessions.map(s => 
+          s.id === sessionId ? { ...s, state: newState, timestamp: Date.now() } : s
+        ));
+
+        return newState;
       });
-      
-      const newBotMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: MessageRole.Model,
-        content: accumulatedResponse,
-        timestamp: new Date()
-      };
-
-      const newState = {
-        messages: [...state.messages, newUserMessage, newBotMessage],
-        currentPreviewHtml: newPreview,
-        currentCode: newCode,
-        analysisData: newAnalysis,
-        isGenerating: false
-      };
-
-      setState(newState);
-      setActiveTab(activeTabOverride);
-
-      // Explicit save after generation ensures "lastCode" is correct in storage
-      setSessions(prev => prev.map(s => 
-        s.id === sessionId ? { ...s, state: newState, timestamp: Date.now() } : s
-      ));
 
     } catch (error) {
       console.error(error);
@@ -235,7 +246,7 @@ export default function App() {
         isGenerating: false
       }));
     }
-  }, [state.messages, state.currentPreviewHtml, state.currentCode, state.analysisData, activeTab, currentSessionId]);
+  }, [currentSessionId, activeTab]);
 
   return (
     <div className="h-screen w-screen bg-[#0f172a] text-white flex overflow-hidden">
