@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { Message, MessageRole, Attachment } from '../types';
 import { Send, Bot, User, Mic, MicOff, Paperclip, FileText, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -9,12 +9,19 @@ interface ChatInterfaceProps {
   isGenerating: boolean;
 }
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, isGenerating }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = React.memo(({ messages, onSendMessage, isGenerating }) => {
   const [input, setInput] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Memoize markdown components to prevent recreation on each render
+  const markdownComponents = useMemo(() => ({
+    code({node, className, children, ...props}: any) {
+      return <code className="bg-black/30 px-1 py-0.5 rounded text-indigo-300 font-mono" {...props}>{children}</code>
+    }
+  }), []);
   
   // Auto-scroll to bottom
   useEffect(() => {
@@ -23,19 +30,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
     }
   }, [messages]);
 
-  const handleSend = () => {
+  const handleSend = useCallback(() => {
     if (!input.trim() && attachments.length === 0) return;
     onSendMessage(input, attachments);
     setInput('');
     setAttachments([]);
-  };
+  }, [input, attachments, onSendMessage]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
-  };
+  }, [handleSend]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -78,12 +85,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const removeAttachment = (index: number) => {
+  const removeAttachment = useCallback((index: number) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
-  };
+  }, []);
 
   // Basic Speech Recognition setup
-  const toggleListening = () => {
+  const toggleListening = useCallback(() => {
     if (isListening) {
       setIsListening(false);
       return;
@@ -106,9 +113,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
     } else {
       alert("Speech recognition not supported in this browser.");
     }
-  };
+  }, [isListening]);
 
-  const renderAttachmentPreview = (att: Attachment, idx: number, isInput = false) => {
+  const renderAttachmentPreview = useCallback((att: Attachment, idx: number, isInput = false) => {
      const isImage = att.mimeType.startsWith('image/');
      
      if (isImage) {
@@ -130,7 +137,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
              </span>
          </div>
      );
-  };
+  }, []);
 
   return (
     <div className="flex flex-col h-full bg-gray-900 rounded-xl overflow-hidden border border-gray-800 shadow-2xl">
@@ -183,13 +190,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
                     : 'bg-gray-800 text-gray-200 rounded-tl-none border border-gray-700'
                 }`}
               >
-                <ReactMarkdown 
-                  components={{
-                      code({node, className, children, ...props}) {
-                          return <code className="bg-black/30 px-1 py-0.5 rounded text-indigo-300 font-mono" {...props}>{children}</code>
-                      }
-                  }}
-                >
+                <ReactMarkdown components={markdownComponents}>
                   {msg.content}
                 </ReactMarkdown>
               </div>
@@ -275,6 +276,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, 
       </div>
     </div>
   );
-};
+});
+
+ChatInterface.displayName = 'ChatInterface';
 
 export default ChatInterface;

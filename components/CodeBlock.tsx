@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import { Copy, Download } from 'lucide-react';
 
 interface CodeBlockProps {
@@ -6,12 +6,12 @@ interface CodeBlockProps {
   language?: string;
 }
 
-const CodeBlock: React.FC<CodeBlockProps> = ({ code, language = 'typescript' }) => {
-  const copyToClipboard = () => {
+const CodeBlock: React.FC<CodeBlockProps> = React.memo(({ code, language = 'typescript' }) => {
+  const copyToClipboard = useCallback(() => {
     navigator.clipboard.writeText(code);
-  };
+  }, [code]);
 
-  const downloadCode = () => {
+  const downloadCode = useCallback(() => {
     const blob = new Blob([code], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -21,7 +21,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ code, language = 'typescript' }) 
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  };
+  }, [code, language]);
 
   return (
     <div className="rounded-lg overflow-hidden bg-[#1e1e1e] border border-gray-700 my-4 shadow-lg">
@@ -51,6 +51,8 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ code, language = 'typescript' }) 
       </div>
     </div>
   );
-};
+});
+
+CodeBlock.displayName = 'CodeBlock';
 
 export default CodeBlock;

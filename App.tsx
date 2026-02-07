@@ -1,11 +1,14 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { Smartphone, Code2, BarChart2, Zap, History, Plus, MessageSquare, Trash2, Edit2, Save, X, Download } from 'lucide-react';
 import ChatInterface from './components/ChatInterface';
-import MobileSimulator from './components/MobileSimulator';
-import CodeBlock from './components/CodeBlock';
-import AnalysisChart from './components/AnalysisChart';
 import { AppState, Message, MessageRole, AnalysisData, Attachment, ChatSession } from './types';
 import { sendMessageToGemini, parseGeneratedAssets, parseAnalysisData } from './services/gemini';
+import { useDebounce } from './hooks/useDebounce';
+
+// Lazy load heavy components that are not immediately visible
+const MobileSimulator = lazy(() => import('./components/MobileSimulator'));
+const CodeBlock = lazy(() => import('./components/CodeBlock'));
+const AnalysisChart = lazy(() => import('./components/AnalysisChart'));
 
 const INITIAL_PREVIEW_HTML = `
 <div class="flex flex-col items-center justify-center h-full bg-gray-900 p-6 text-center">
@@ -43,6 +46,13 @@ export default function App() {
 
   const [state, setState] = useState<AppState>(INITIAL_STATE);
 
+  // Debounced localStorage save function to prevent excessive writes
+  const debouncedSaveToStorage = useDebounce((sessionsToSave: ChatSession[]) => {
+    if (sessionsToSave.length > 0) {
+      localStorage.setItem('ai_mobile_studio_sessions', JSON.stringify(sessionsToSave));
+    }
+  }, 500); // Wait 500ms after last change before saving
+
   // Load sessions from local storage on mount
   useEffect(() => {
     const saved = localStorage.getItem('ai_mobile_studio_sessions');
@@ -56,14 +66,12 @@ export default function App() {
     }
   }, []);
 
-  // Save sessions to local storage whenever they change
+  // Save sessions to local storage whenever they change (debounced)
   useEffect(() => {
-    if (sessions.length > 0) {
-      localStorage.setItem('ai_mobile_studio_sessions', JSON.stringify(sessions));
-    }
-  }, [sessions]);
+    debouncedSaveToStorage(sessions);
+  }, [sessions, debouncedSaveToStorage]);
 
-  // Auto-save current session state
+  // Auto-save current session state - Fixed dependency array
   useEffect(() => {
     if (currentSessionId && !state.isGenerating) {
       setSessions(prev => prev.map(session => 
@@ -72,9 +80,9 @@ export default function App() {
           : session
       ));
     }
-  }, [state, currentSessionId]); // Note: excluding isGenerating to avoid constant writes during stream
+  }, [state, currentSessionId, state.isGenerating]);
 
-  const startNewSession = () => {
+  const startNewSession = useCallback(() => {
     const newId = Date.now().toString();
     const newSession: ChatSession = {
       id: newId,
@@ -87,38 +95,38 @@ export default function App() {
     setCurrentSessionId(newId);
     setState(INITIAL_STATE);
     setShowHistory(false);
-  };
+  }, []);
 
-  const loadSession = (session: ChatSession) => {
+  const loadSession = useCallback((session: ChatSession) => {
     setCurrentSessionId(session.id);
     setState(session.state);
     setShowHistory(false);
-  };
+  }, []);
 
-  const deleteSession = (e: React.MouseEvent, id: string) => {
+  const deleteSession = useCallback((e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     setSessions(prev => prev.filter(s => s.id !== id));
     if (currentSessionId === id) {
       setCurrentSessionId(null);
       setState(INITIAL_STATE);
     }
-  };
+  }, [currentSessionId]);
 
-  const startEditingTitle = (e: React.MouseEvent, session: ChatSession) => {
+  const startEditingTitle = useCallback((e: React.MouseEvent, session: ChatSession) => {
     e.stopPropagation();
     setIsEditingTitle(session.id);
     setEditTitleInput(session.title);
-  };
+  }, []);
 
-  const saveTitle = (e: React.MouseEvent | React.KeyboardEvent, id: string) => {
+  const saveTitle = useCallback((e: React.MouseEvent | React.KeyboardEvent, id: string) => {
     e.stopPropagation();
     if (editTitleInput.trim()) {
       setSessions(prev => prev.map(s => s.id === id ? { ...s, title: editTitleInput } : s));
     }
     setIsEditingTitle(null);
-  };
+  }, [editTitleInput]);
 
-  const exportProject = () => {
+  const exportProject = useCallback(() => {
     // Determine what to export: current session or create a new wrapper for current state
     const sessionToExport = currentSessionId 
         ? sessions.find(s => s.id === currentSessionId) 
@@ -133,7 +141,7 @@ export default function App() {
     document.body.appendChild(downloadAnchorNode); // required for firefox
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
-  };
+  }, [currentSessionId, sessions, state]);
 
   const handleSendMessage = useCallback(async (text: string, attachments: Attachment[] = []) => {
     // Ensure we have a session
@@ -169,8 +177,16 @@ export default function App() {
     try {
       let accumulatedResponse = "";
       
+      // Use functional update to access latest state
+      const currentMessages = await new Promise<Message[]>(resolve => {
+        setState(prev => {
+          resolve(prev.messages);
+          return prev;
+        });
+      });
+
       await sendMessageToGemini(
-        [...state.messages, newUserMessage],
+        [...currentMessages, newUserMessage],
         text,
         attachments,
         (chunk) => {
@@ -180,46 +196,49 @@ export default function App() {
 
       const assets = parseGeneratedAssets(accumulatedResponse);
       
-      let newPreview = state.currentPreviewHtml;
-      let newCode = state.currentCode;
-      let newAnalysis = state.analysisData;
-      let activeTabOverride = activeTab;
+      setState(prev => {
+        let newPreview = prev.currentPreviewHtml;
+        let newCode = prev.currentCode;
+        let newAnalysis = prev.analysisData;
+        let activeTabOverride = activeTab;
 
-      assets.forEach(asset => {
-        if (asset.type === 'preview') {
-          newPreview = asset.content;
-          activeTabOverride = 'preview'; 
-        } else if (asset.type === 'code') {
-          newCode = asset.content;
-          if (activeTabOverride !== 'preview') activeTabOverride = 'code';
-        } else if (asset.type === 'analysis') {
-            newAnalysis = parseAnalysisData(asset.content);
-            activeTabOverride = 'analysis';
-        }
+        assets.forEach(asset => {
+          if (asset.type === 'preview') {
+            newPreview = asset.content;
+            activeTabOverride = 'preview'; 
+          } else if (asset.type === 'code') {
+            newCode = asset.content;
+            if (activeTabOverride !== 'preview') activeTabOverride = 'code';
+          } else if (asset.type === 'analysis') {
+              newAnalysis = parseAnalysisData(asset.content);
+              activeTabOverride = 'analysis';
+          }
+        });
+        
+        const newBotMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: MessageRole.Model,
+          content: accumulatedResponse,
+          timestamp: new Date()
+        };
+
+        const newState = {
+          messages: [...prev.messages, newBotMessage],
+          currentPreviewHtml: newPreview,
+          currentCode: newCode,
+          analysisData: newAnalysis,
+          isGenerating: false
+        };
+
+        setActiveTab(activeTabOverride);
+
+        // Explicit save after generation ensures "lastCode" is correct in storage
+        setSessions(prevSessions => prevSessions.map(s => 
+          s.id === sessionId ? { ...s, state: newState, timestamp: Date.now() } : s
+        ));
+
+        return newState;
       });
-      
-      const newBotMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: MessageRole.Model,
-        content: accumulatedResponse,
-        timestamp: new Date()
-      };
-
-      const newState = {
-        messages: [...state.messages, newUserMessage, newBotMessage],
-        currentPreviewHtml: newPreview,
-        currentCode: newCode,
-        analysisData: newAnalysis,
-        isGenerating: false
-      };
-
-      setState(newState);
-      setActiveTab(activeTabOverride);
-
-      // Explicit save after generation ensures "lastCode" is correct in storage
-      setSessions(prev => prev.map(s => 
-        s.id === sessionId ? { ...s, state: newState, timestamp: Date.now() } : s
-      ));
 
     } catch (error) {
       console.error(error);
@@ -235,7 +254,7 @@ export default function App() {
         isGenerating: false
       }));
     }
-  }, [state.messages, state.currentPreviewHtml, state.currentCode, state.analysisData, activeTab, currentSessionId]);
+  }, [currentSessionId, activeTab]);
 
   return (
     <div className="h-screen w-screen bg-[#0f172a] text-white flex overflow-hidden">
@@ -380,7 +399,9 @@ export default function App() {
           
           {activeTab === 'preview' && (
             <div className="flex flex-col h-full items-center justify-center animate-in fade-in duration-500">
-              <MobileSimulator htmlContent={state.currentPreviewHtml} />
+              <Suspense fallback={<div className="text-gray-400">Loading preview...</div>}>
+                <MobileSimulator htmlContent={state.currentPreviewHtml} />
+              </Suspense>
               <p className="mt-6 text-sm text-gray-500">
                 Visual approximation based on Tailwind CSS
               </p>
@@ -390,13 +411,17 @@ export default function App() {
           {activeTab === 'code' && (
             <div className="h-full animate-in fade-in duration-500">
                <h3 className="text-gray-400 text-sm mb-4">Generated React Native (Expo) Component</h3>
-               <CodeBlock code={state.currentCode} language="typescript" />
+               <Suspense fallback={<div className="text-gray-400">Loading code...</div>}>
+                 <CodeBlock code={state.currentCode} language="typescript" />
+               </Suspense>
             </div>
           )}
 
           {activeTab === 'analysis' && (
               <div className="h-full flex flex-col items-center justify-center animate-in fade-in duration-500 max-w-lg mx-auto">
-                  <AnalysisChart data={state.analysisData} />
+                  <Suspense fallback={<div className="text-gray-400">Loading analysis...</div>}>
+                    <AnalysisChart data={state.analysisData} />
+                  </Suspense>
                   <div className="mt-8 p-4 bg-gray-800/50 rounded-lg border border-gray-700 w-full">
                       <h4 className="text-indigo-400 font-semibold mb-2">AI Insights</h4>
                       <p className="text-sm text-gray-300 leading-relaxed">
