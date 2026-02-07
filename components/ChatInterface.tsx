@@ -16,6 +16,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = React.memo(({ messages, onSe
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  // Memoize markdown components to prevent recreation on each render
+  const markdownComponents = useMemo(() => ({
+    code({node, className, children, ...props}: any) {
+      return <code className="bg-black/30 px-1 py-0.5 rounded text-indigo-300 font-mono" {...props}>{children}</code>
+    }
+  }), []);
+  
   // Auto-scroll to bottom
   useEffect(() => {
     if (scrollRef.current) {
@@ -183,13 +190,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = React.memo(({ messages, onSe
                     : 'bg-gray-800 text-gray-200 rounded-tl-none border border-gray-700'
                 }`}
               >
-                <ReactMarkdown 
-                  components={{
-                      code({node, className, children, ...props}) {
-                          return <code className="bg-black/30 px-1 py-0.5 rounded text-indigo-300 font-mono" {...props}>{children}</code>
-                      }
-                  }}
-                >
+                <ReactMarkdown components={markdownComponents}>
                   {msg.content}
                 </ReactMarkdown>
               </div>

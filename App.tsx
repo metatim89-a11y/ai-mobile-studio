@@ -1,11 +1,14 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { Smartphone, Code2, BarChart2, Zap, History, Plus, MessageSquare, Trash2, Edit2, Save, X, Download } from 'lucide-react';
 import ChatInterface from './components/ChatInterface';
-import MobileSimulator from './components/MobileSimulator';
-import CodeBlock from './components/CodeBlock';
-import AnalysisChart from './components/AnalysisChart';
 import { AppState, Message, MessageRole, AnalysisData, Attachment, ChatSession } from './types';
 import { sendMessageToGemini, parseGeneratedAssets, parseAnalysisData } from './services/gemini';
+import { useDebounce } from './hooks/useDebounce';
+
+// Lazy load heavy components that are not immediately visible
+const MobileSimulator = lazy(() => import('./components/MobileSimulator'));
+const CodeBlock = lazy(() => import('./components/CodeBlock'));
+const AnalysisChart = lazy(() => import('./components/AnalysisChart'));
 
 const INITIAL_PREVIEW_HTML = `
 <div class="flex flex-col items-center justify-center h-full bg-gray-900 p-6 text-center">
@@ -43,6 +46,13 @@ export default function App() {
 
   const [state, setState] = useState<AppState>(INITIAL_STATE);
 
+  // Debounced localStorage save function to prevent excessive writes
+  const debouncedSaveToStorage = useDebounce((sessionsToSave: ChatSession[]) => {
+    if (sessionsToSave.length > 0) {
+      localStorage.setItem('ai_mobile_studio_sessions', JSON.stringify(sessionsToSave));
+    }
+  }, 500); // Wait 500ms after last change before saving
+
   // Load sessions from local storage on mount
   useEffect(() => {
     const saved = localStorage.getItem('ai_mobile_studio_sessions');
@@ -56,12 +66,10 @@ export default function App() {
     }
   }, []);
 
-  // Save sessions to local storage whenever they change
+  // Save sessions to local storage whenever they change (debounced)
   useEffect(() => {
-    if (sessions.length > 0) {
-      localStorage.setItem('ai_mobile_studio_sessions', JSON.stringify(sessions));
-    }
-  }, [sessions]);
+    debouncedSaveToStorage(sessions);
+  }, [sessions, debouncedSaveToStorage]);
 
   // Auto-save current session state - Fixed dependency array
   useEffect(() => {
@@ -391,7 +399,9 @@ export default function App() {
           
           {activeTab === 'preview' && (
             <div className="flex flex-col h-full items-center justify-center animate-in fade-in duration-500">
-              <MobileSimulator htmlContent={state.currentPreviewHtml} />
+              <Suspense fallback={<div className="text-gray-400">Loading preview...</div>}>
+                <MobileSimulator htmlContent={state.currentPreviewHtml} />
+              </Suspense>
               <p className="mt-6 text-sm text-gray-500">
                 Visual approximation based on Tailwind CSS
               </p>
@@ -401,13 +411,17 @@ export default function App() {
           {activeTab === 'code' && (
             <div className="h-full animate-in fade-in duration-500">
                <h3 className="text-gray-400 text-sm mb-4">Generated React Native (Expo) Component</h3>
-               <CodeBlock code={state.currentCode} language="typescript" />
+               <Suspense fallback={<div className="text-gray-400">Loading code...</div>}>
+                 <CodeBlock code={state.currentCode} language="typescript" />
+               </Suspense>
             </div>
           )}
 
           {activeTab === 'analysis' && (
               <div className="h-full flex flex-col items-center justify-center animate-in fade-in duration-500 max-w-lg mx-auto">
-                  <AnalysisChart data={state.analysisData} />
+                  <Suspense fallback={<div className="text-gray-400">Loading analysis...</div>}>
+                    <AnalysisChart data={state.analysisData} />
+                  </Suspense>
                   <div className="mt-8 p-4 bg-gray-800/50 rounded-lg border border-gray-700 w-full">
                       <h4 className="text-indigo-400 font-semibold mb-2">AI Insights</h4>
                       <p className="text-sm text-gray-300 leading-relaxed">
